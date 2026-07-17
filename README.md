@@ -13,6 +13,91 @@ auto-shortlists strong candidates — all asynchronously so uploads never block.
 
 ---
 
+## Features
+
+### Authentication & access
+- JWT login with access + refresh tokens; automatic token refresh on `401`
+  (the frontend interceptor transparently replays the failed request).
+- `/auth/me/` current-user endpoint; every API route requires authentication.
+- `create_recruiter` management command to provision recruiter accounts.
+- Protected frontend routes (unauthenticated users are redirected to `/login`).
+
+### Job postings
+- Full CRUD for job postings — title, department, location, description,
+  free-text `requirements`, and open/closed state.
+- Dashboard list annotated with **applicant** and **shortlisted** counts per job.
+- Filter by `is_open` / `department`, search by title/department/location,
+  order by created date or title.
+
+### Resume intake & parsing
+- Upload resumes (PDF / DOCX / DOC) tagged to a job, with an upload progress bar.
+- File validation (allowed extensions, 15 MB limit).
+- Uploads return immediately; parsing/scoring runs **asynchronously** on Celery.
+- Parsing uses **pyresparser** first, with a transparent fallback to a custom
+  **spaCy 3.x + regex** parser; `parser_used` records which one ran.
+- Extracts name, email, phone, skills, experience, education and total years.
+- Original resume download (Nginx `X-Accel-Redirect` in prod, Django in dev).
+
+### AI scoring & shortlisting
+- **OpenAI** match scoring (`0–100`) plus a short justification, comparing the
+  parsed resume against the job requirements.
+- Auto-shortlist / auto-reject against a configurable `SHORTLIST_THRESHOLD`.
+- Up to 3 retries on transient LLM failures, then the candidate is marked
+  `failed`; a **reprocess** endpoint re-runs parse + score on demand.
+- Status lifecycle: `pending → processing → shortlisted / rejected / failed`.
+
+### Manual decisions (human-in-the-loop)
+- Recruiters can override the AI: **shortlist**, **reject**, or **reset** back
+  to AI control.
+- Manual decisions are **sticky** — re-processing refreshes the parsed data and
+  match score but never overwrites a human's status (see `Candidate.apply_score`
+  and `tasks.py`).
+- Records who decided (`decided_by`) and when (`decided_at`); an optional note
+  can be attached to any decision.
+
+### Candidate notes
+- Add and list free-text notes per candidate (interview feedback, availability…),
+  each stamped with author and time.
+- Surfaced in a modal from the candidate's name and editable inline in Django admin.
+
+### Analytics
+- Per-job stats: status breakdown, score summary (average / median / max / min),
+  and **top skills** across all applicants.
+- Rendered as a live stats bar on the job page (updates while candidates process).
+
+### Export
+- One-click **CSV export** of a job's candidates (name, email, phone, score,
+  status, manual flag, experience, skills, justification, upload date).
+- Downloaded as an authenticated blob so the JWT rides the request header.
+
+### Candidate table (per job)
+- Sortable/filterable by **status** and **minimum score**; orderable by
+  score / date / name.
+- **Live polling** while any candidate is still processing, so scores appear as
+  they land.
+- Status badges, score, experience, resume download, decision buttons, re-run
+  and notes — all inline.
+
+### Infrastructure & operations
+- Fully Dockerized: Postgres, Redis, Django backend, Celery worker, React
+  frontend and an Nginx edge proxy (`/api`, `/admin`, SPA, media streaming).
+- Environment-driven config (same image runs locally and in the cloud);
+  security hardening when `DEBUG` is off (HTTPS proxy header, secure cookies,
+  CSRF trusted origins).
+- WhiteNoise static serving, structured console logging, DB indexes on
+  `(job, status)` and `(job, -score)`, and paginated APIs (page size 25).
+- Django admin for jobs, candidates and notes.
+- **CI/CD:** GitHub Actions → test → build → push images to AWS ECR.
+
+### Testing
+- `pytest` + `pytest-django` suite covering auth, job counts, upload queuing and
+  file validation, plus manual-decision, notes, stats and CSV-export tests.
+
+> **Not in scope:** no automatic pulling from LinkedIn/Indeed — resumes come in
+> only via manual recruiter upload.
+
+---
+
 ## Core flow
 
 1. Recruiter logs in (JWT) and creates a **Job Posting** with free-text
@@ -29,9 +114,6 @@ auto-shortlists strong candidates — all asynchronously so uploads never block.
    candidate table (name, score, status, resume download) that is
    sortable/filterable by score and status. It live-polls while candidates are
    still processing.
-
-> **Not in v1:** no automatic pulling from LinkedIn/Indeed — resumes come in
-> only via manual recruiter upload.
 
 ---
 

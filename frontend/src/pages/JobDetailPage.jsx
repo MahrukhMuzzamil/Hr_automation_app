@@ -2,16 +2,21 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { candidatesApi, jobsApi } from "../api/recruitment";
 import CandidateTable from "../components/CandidateTable";
+import JobStats from "../components/JobStats";
+import NotesModal from "../components/NotesModal";
 import UploadResume from "../components/UploadResume";
 
 export default function JobDetailPage() {
   const { jobId } = useParams();
   const [job, setJob] = useState(null);
   const [candidates, setCandidates] = useState([]);
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
   const [minScore, setMinScore] = useState("");
   const [ordering, setOrdering] = useState("-score");
+  const [notesFor, setNotesFor] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const loadCandidates = useCallback(() => {
     const params = { ordering };
@@ -22,12 +27,19 @@ export default function JobDetailPage() {
       .then((data) => setCandidates(data.results || data));
   }, [jobId, ordering, statusFilter, minScore]);
 
+  const loadStats = useCallback(
+    () => jobsApi.stats(jobId).then(setStats),
+    [jobId]
+  );
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([jobsApi.get(jobId).then(setJob), loadCandidates()]).finally(() =>
-      setLoading(false)
-    );
-  }, [jobId, loadCandidates]);
+    Promise.all([
+      jobsApi.get(jobId).then(setJob),
+      loadCandidates(),
+      loadStats(),
+    ]).finally(() => setLoading(false));
+  }, [jobId, loadCandidates, loadStats]);
 
   // Poll while any candidate is still processing so scores appear live.
   useEffect(() => {
@@ -35,13 +47,47 @@ export default function JobDetailPage() {
       ["pending", "processing"].includes(c.status)
     );
     if (!pending) return undefined;
-    const timer = setInterval(loadCandidates, 4000);
+    const timer = setInterval(() => {
+      loadCandidates();
+      loadStats();
+    }, 4000);
     return () => clearInterval(timer);
-  }, [candidates, loadCandidates]);
+  }, [candidates, loadCandidates, loadStats]);
+
+  const refresh = useCallback(
+    () => Promise.all([loadCandidates(), loadStats()]),
+    [loadCandidates, loadStats]
+  );
 
   const reprocess = async (id) => {
     await candidatesApi.reprocess(id);
-    loadCandidates();
+    refresh();
+  };
+
+  const decide = async (id, decision) => {
+    let note;
+    if (decision !== "reset") {
+      note = window.prompt(`Optional note for this ${decision}:`) || "";
+    }
+    await candidatesApi.decide(id, decision, note);
+    refresh();
+  };
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const blob = await jobsApi.exportCsv(jobId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `candidates_${jobId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (loading && !job) return <p className="muted">Loading…</p>;
@@ -58,14 +104,22 @@ export default function JobDetailPage() {
             <h2>{job.title}</h2>
             <p className="muted">
               {job.department || "—"}
-              {job.location ? ` · ${job.location}` : ""} ·{" "}
-              {job.applicant_count} applicants · {job.shortlisted_count} shortlisted
+              {job.location ? ` · ${job.location}` : ""}
             </p>
           </div>
+          <button
+            className="btn btn-ghost"
+            onClick={exportCsv}
+            disabled={exporting || (stats && stats.total === 0)}
+          >
+            {exporting ? "Exporting…" : "Export CSV"}
+          </button>
         </div>
       )}
 
-      <UploadResume jobId={jobId} onUploaded={loadCandidates} />
+      <JobStats stats={stats} />
+
+      <UploadResume jobId={jobId} onUploaded={refresh} />
 
       <div className="card">
         <div className="table-controls">
@@ -105,8 +159,17 @@ export default function JobDetailPage() {
           </label>
         </div>
 
-        <CandidateTable candidates={candidates} onReprocess={reprocess} />
+        <CandidateTable
+          candidates={candidates}
+          onReprocess={reprocess}
+          onDecide={decide}
+          onOpenNotes={setNotesFor}
+        />
       </div>
+
+      {notesFor && (
+        <NotesModal candidate={notesFor} onClose={() => setNotesFor(null)} />
+      )}
     </div>
   );
 }

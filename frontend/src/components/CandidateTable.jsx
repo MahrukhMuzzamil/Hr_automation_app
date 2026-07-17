@@ -8,18 +8,26 @@ const STATUS_LABELS = {
   failed: "Failed",
 };
 
-function StatusBadge({ status }) {
+function StatusBadge({ status, manual }) {
   return (
     <span className={`badge badge-${status}`}>
       {STATUS_LABELS[status] || status}
+      {manual && <span className="badge-manual" title="Manual recruiter decision"> ·M</span>}
     </span>
   );
 }
 
-export default function CandidateTable({ candidates, onReprocess }) {
+export default function CandidateTable({
+  candidates,
+  onReprocess,
+  onDecide,
+  onOpenNotes,
+}) {
   if (candidates.length === 0) {
     return <p className="muted">No candidates match the current filters.</p>;
   }
+
+  const decided = (c) => ["pending", "processing"].includes(c.status);
 
   return (
     <div className="table-wrap">
@@ -31,6 +39,7 @@ export default function CandidateTable({ candidates, onReprocess }) {
             <th>Status</th>
             <th>Experience</th>
             <th>Resume</th>
+            <th>Decision</th>
             <th></th>
           </tr>
         </thead>
@@ -38,7 +47,13 @@ export default function CandidateTable({ candidates, onReprocess }) {
           {candidates.map((c) => (
             <tr key={c.id}>
               <td>
-                <div className="cand-name">{c.name || "—"}</div>
+                <button
+                  className="link-button cand-name"
+                  onClick={() => onOpenNotes?.(c)}
+                  title="View notes"
+                >
+                  {c.name || "—"}
+                </button>
                 {c.email && <div className="muted small">{c.email}</div>}
               </td>
               <td>
@@ -49,7 +64,7 @@ export default function CandidateTable({ candidates, onReprocess }) {
                 )}
               </td>
               <td>
-                <StatusBadge status={c.status} />
+                <StatusBadge status={c.status} manual={c.is_manual_decision} />
               </td>
               <td>
                 {c.total_experience_years != null
@@ -66,14 +81,46 @@ export default function CandidateTable({ candidates, onReprocess }) {
                 </a>
               </td>
               <td>
-                {["failed", "rejected"].includes(c.status) && (
-                  <button
-                    className="btn btn-ghost small"
-                    onClick={() => onReprocess(c.id)}
-                  >
-                    Re-run
-                  </button>
-                )}
+                <div className="decision-actions">
+                  {c.status !== "shortlisted" && (
+                    <button
+                      className="btn btn-ghost small"
+                      onClick={() => onDecide?.(c.id, "shortlist")}
+                      disabled={decided(c)}
+                    >
+                      Shortlist
+                    </button>
+                  )}
+                  {c.status !== "rejected" && (
+                    <button
+                      className="btn btn-ghost small"
+                      onClick={() => onDecide?.(c.id, "reject")}
+                      disabled={decided(c)}
+                    >
+                      Reject
+                    </button>
+                  )}
+                  {c.is_manual_decision && (
+                    <button
+                      className="btn btn-ghost small"
+                      onClick={() => onDecide?.(c.id, "reset")}
+                      title="Revert to AI scoring"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </td>
+              <td>
+                {["failed", "rejected"].includes(c.status) &&
+                  !c.is_manual_decision && (
+                    <button
+                      className="btn btn-ghost small"
+                      onClick={() => onReprocess(c.id)}
+                    >
+                      Re-run
+                    </button>
+                  )}
               </td>
             </tr>
           ))}

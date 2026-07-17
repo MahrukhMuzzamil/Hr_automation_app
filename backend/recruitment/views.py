@@ -1,18 +1,23 @@
+import csv
 import mimetypes
 import os
+from statistics import median
 
 from django.conf import settings
 from django.http import FileResponse, Http404, HttpResponse
+from django.utils import timezone
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Candidate, JobPosting
+from .models import Candidate, CandidateNote, JobPosting
 from .serializers import (
     CandidateListSerializer,
+    CandidateNoteSerializer,
     CandidateSerializer,
+    DecisionSerializer,
     JobPostingSerializer,
     ResumeUploadSerializer,
 )
@@ -62,6 +67,88 @@ class JobPostingViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
 
+    @action(detail=True, methods=["get"])
+    def stats(self, request, pk=None):
+        """Analytics for a job: status breakdown, score summary, top skills."""
+        job = self.get_object()
+        candidates = list(job.candidates.all())
+
+        by_status = {choice.value: 0 for choice in Candidate.Status}
+        scores = []
+        skill_counts = {}
+        for cand in candidates:
+            by_status[cand.status] = by_status.get(cand.status, 0) + 1
+            if cand.score is not None:
+                scores.append(cand.score)
+            for skill in cand.skills or []:
+                key = str(skill).strip().lower()
+                if key:
+                    skill_counts[key] = skill_counts.get(key, 0) + 1
+
+        top_skills = sorted(
+            skill_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        )[:10]
+
+        score_summary = None
+        if scores:
+            score_summary = {
+                "count": len(scores),
+                "average": round(sum(scores) / len(scores), 1),
+                "median": round(median(scores), 1),
+                "max": round(max(scores), 1),
+                "min": round(min(scores), 1),
+            }
+
+        return Response(
+            {
+                "total": len(candidates),
+                "by_status": by_status,
+                "processing": by_status.get(Candidate.Status.PENDING, 0)
+                + by_status.get(Candidate.Status.PROCESSING, 0),
+                "score_summary": score_summary,
+                "top_skills": [
+                    {"skill": name, "count": count} for name, count in top_skills
+                ],
+            }
+        )
+
+    @action(detail=True, methods=["get"])
+    def export(self, request, pk=None):
+        """Download the job's candidates as a CSV."""
+        job = self.get_object()
+        response = HttpResponse(content_type="text/csv")
+        slug = "".join(
+            ch if ch.isalnum() else "_" for ch in job.title.lower()
+        ).strip("_") or "job"
+        stamp = timezone.now().strftime("%Y%m%d")
+        response["Content-Disposition"] = (
+            f'attachment; filename="candidates_{slug}_{stamp}.csv"'
+        )
+
+        writer = csv.writer(response)
+        writer.writerow(
+            [
+                "Name", "Email", "Phone", "Score", "Status",
+                "Manual decision", "Experience (yrs)", "Skills",
+                "Justification", "Uploaded",
+            ]
+        )
+        for c in job.candidates.all():
+            writer.writerow(
+                [
+                    c.name, c.email, c.phone,
+                    "" if c.score is None else round(c.score, 1),
+                    c.get_status_display(),
+                    "yes" if c.is_manual_decision else "no",
+                    "" if c.total_experience_years is None
+                    else c.total_experience_years,
+                    ", ".join(str(s) for s in (c.skills or [])),
+                    c.justification,
+                    c.created_at.isoformat(),
+                ]
+            )
+        return response
+
 
 class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
     """Read candidates plus resume upload and download endpoints."""
@@ -96,11 +183,65 @@ class CandidateViewSet(viewsets.ReadOnlyModelViewSet):
     def reprocess(self, request, pk=None):
         """Re-run parsing + scoring (e.g. after a transient OpenAI failure)."""
         candidate = self.get_object()
-        candidate.status = Candidate.Status.PENDING
+        # Leave a manually-decided candidate on its recruiter status; the
+        # pipeline will refresh the score without touching it.
+        if not candidate.is_manual_decision:
+            candidate.status = Candidate.Status.PENDING
         candidate.error_message = ""
         candidate.save(update_fields=["status", "error_message", "updated_at"])
         process_candidate_resume.delay(candidate.id)
         return Response({"status": "queued"}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"], url_path="decision")
+    def decision(self, request, pk=None):
+        """Manually shortlist/reject a candidate, or reset to AI scoring.
+
+        Body: {"decision": "shortlist"|"reject"|"reset", "note": "<optional>"}.
+        A manual decision is preserved across re-processing (see
+        Candidate.apply_score).
+        """
+        candidate = self.get_object()
+        serializer = DecisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        decision = serializer.validated_data["decision"]
+        user = request.user if request.user.is_authenticated else None
+
+        if decision == "reset":
+            candidate.clear_manual_decision()
+        else:
+            target = (
+                Candidate.Status.SHORTLISTED
+                if decision == "shortlist"
+                else Candidate.Status.REJECTED
+            )
+            candidate.set_manual_decision(user=user, status=target)
+        candidate.save()
+
+        note_body = serializer.validated_data.get("note", "").strip()
+        if note_body:
+            CandidateNote.objects.create(
+                candidate=candidate, author=user, body=note_body
+            )
+
+        return Response(
+            CandidateSerializer(candidate, context={"request": request}).data
+        )
+
+    @action(detail=True, methods=["get", "post"], url_path="notes")
+    def notes(self, request, pk=None):
+        """List (GET) or add (POST) recruiter notes on a candidate."""
+        candidate = self.get_object()
+        if request.method == "POST":
+            serializer = CandidateNoteSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(
+                candidate=candidate,
+                author=request.user if request.user.is_authenticated else None,
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        qs = candidate.notes.select_related("author").all()
+        return Response(CandidateNoteSerializer(qs, many=True).data)
 
     @action(detail=True, methods=["get"])
     def resume(self, request, pk=None):

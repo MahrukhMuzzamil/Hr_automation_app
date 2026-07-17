@@ -30,7 +30,10 @@ def process_candidate_resume(self, candidate_id: int):
         logger.warning("Candidate %s no longer exists; skipping", candidate_id)
         return
 
-    candidate.status = Candidate.Status.PROCESSING
+    # A manually-decided candidate keeps its recruiter status throughout;
+    # we still refresh the parsed data and score, just never the status.
+    if not candidate.is_manual_decision:
+        candidate.status = Candidate.Status.PROCESSING
     candidate.error_message = ""
     candidate.save(update_fields=["status", "error_message", "updated_at"])
 
@@ -75,6 +78,8 @@ def _apply_parsed(candidate: Candidate, parsed) -> None:
 
 
 def _mark_failed(candidate: Candidate, message: str) -> None:
-    candidate.status = Candidate.Status.FAILED
+    # Record the error, but never flip a human decision to FAILED.
+    if not candidate.is_manual_decision:
+        candidate.status = Candidate.Status.FAILED
     candidate.error_message = message
     candidate.save(update_fields=["status", "error_message", "updated_at"])

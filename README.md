@@ -158,9 +158,20 @@ cd backend && pytest
 | GET | `/auth/me/` | Current recruiter |
 | GET/POST | `/jobs/` | List (with applicant/shortlisted counts) / create |
 | GET | `/jobs/{id}/candidates/` | Per-job table; `?status=&min_score=&ordering=` |
+| GET | `/jobs/{id}/stats/` | Analytics: status breakdown, score summary, top skills |
+| GET | `/jobs/{id}/export/` | Download the job's candidates as CSV |
 | POST | `/candidates/upload/` | multipart `job` + `resume` → queues processing |
 | POST | `/candidates/{id}/reprocess/` | Re-run parse + score |
+| POST | `/candidates/{id}/decision/` | Manual `{decision: shortlist\|reject\|reset, note?}` |
+| GET/POST | `/candidates/{id}/notes/` | List / add recruiter notes |
 | GET | `/candidates/{id}/resume/` | Download original resume |
+
+### Manual decisions vs. AI scoring
+
+Recruiters can override the AI with a manual **shortlist**/**reject** (or
+**reset** back to AI control). A manual decision is sticky: the async pipeline
+still refreshes the parsed data and match score on re-processing, but it never
+overwrites a human's status (see `Candidate.apply_score` and `tasks.py`).
 
 ---
 

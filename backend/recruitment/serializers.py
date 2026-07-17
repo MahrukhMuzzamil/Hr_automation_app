@@ -2,7 +2,7 @@ import os
 
 from rest_framework import serializers
 
-from .models import Candidate, JobPosting
+from .models import Candidate, CandidateNote, JobPosting
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".doc"}
 MAX_RESUME_BYTES = 15 * 1024 * 1024  # 15 MB
@@ -22,8 +22,28 @@ class JobPostingSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "created_at", "updated_at")
 
 
+class CandidateNoteSerializer(serializers.ModelSerializer):
+    author_name = serializers.CharField(
+        source="author.username", read_only=True, default=None
+    )
+
+    class Meta:
+        model = CandidateNote
+        fields = ("id", "candidate", "body", "author_name", "created_at")
+        read_only_fields = ("id", "candidate", "author_name", "created_at")
+
+    def validate_body(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Note cannot be empty.")
+        return value
+
+
 class CandidateSerializer(serializers.ModelSerializer):
     resume_url = serializers.SerializerMethodField()
+    decided_by_name = serializers.CharField(
+        source="decided_by.username", read_only=True, default=None
+    )
 
     class Meta:
         model = Candidate
@@ -31,7 +51,8 @@ class CandidateSerializer(serializers.ModelSerializer):
             "id", "job", "name", "email", "phone", "skills", "experience",
             "education", "total_experience_years", "score", "justification",
             "status", "parser_used", "error_message", "original_filename",
-            "resume_url", "created_at", "updated_at",
+            "resume_url", "is_manual_decision", "decided_by_name", "decided_at",
+            "created_at", "updated_at",
         )
         read_only_fields = fields
 
@@ -48,9 +69,21 @@ class CandidateListSerializer(serializers.ModelSerializer):
         model = Candidate
         fields = (
             "id", "name", "email", "score", "status",
-            "total_experience_years", "parser_used", "created_at",
+            "total_experience_years", "parser_used", "is_manual_decision",
+            "created_at",
         )
         read_only_fields = fields
+
+
+class DecisionSerializer(serializers.Serializer):
+    """Input for the manual shortlist/reject/reset decision endpoint."""
+
+    DECISION_CHOICES = ("shortlist", "reject", "reset")
+
+    decision = serializers.ChoiceField(choices=DECISION_CHOICES)
+    note = serializers.CharField(
+        required=False, allow_blank=True, trim_whitespace=True
+    )
 
 
 class ResumeUploadSerializer(serializers.Serializer):

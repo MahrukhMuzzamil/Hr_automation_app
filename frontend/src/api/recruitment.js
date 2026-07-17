@@ -12,6 +12,12 @@ export const jobsApi = {
   create: (payload) => client.post("/jobs/", payload).then((r) => r.data),
   candidates: (id, params = {}) =>
     client.get(`/jobs/${id}/candidates/`, { params }).then((r) => r.data),
+  stats: (id) => client.get(`/jobs/${id}/stats/`).then((r) => r.data),
+  // Fetch the CSV as an authenticated blob (the JWT rides the axios header).
+  exportCsv: (id) =>
+    client
+      .get(`/jobs/${id}/export/`, { responseType: "blob" })
+      .then((r) => r.data),
 };
 
 export const candidatesApi = {
@@ -29,5 +35,12 @@ export const candidatesApi = {
   },
   reprocess: (id) =>
     client.post(`/candidates/${id}/reprocess/`).then((r) => r.data),
+  decide: (id, decision, note) =>
+    client
+      .post(`/candidates/${id}/decision/`, { decision, note })
+      .then((r) => r.data),
+  notes: (id) => client.get(`/candidates/${id}/notes/`).then((r) => r.data),
+  addNote: (id, body) =>
+    client.post(`/candidates/${id}/notes/`, { body }).then((r) => r.data),
   resumeUrl: (id) => `${client.defaults.baseURL}/candidates/${id}/resume/`,
 };

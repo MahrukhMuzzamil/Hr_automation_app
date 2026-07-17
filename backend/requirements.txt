@@ -1,0 +1,28 @@
+# --- Core web stack ---
+Django==5.0.6
+djangorestframework==3.15.1
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.4.0
+django-filter==24.2
+django-environ==0.11.2
+gunicorn==22.0.0
+whitenoise==6.7.0
+psycopg[binary]==3.1.19
+
+# --- Async processing ---
+celery==5.4.0
+redis==5.0.4
+
+# --- Resume parsing (fallback path uses spaCy 3.x + these extractors) ---
+spacy==3.7.4
+pdfminer.six==20231228
+python-docx==1.1.2
+nltk==3.8.1
+
+# --- LLM matching ---
+openai==1.35.7
+
+# NOTE: pyresparser is installed separately in the Dockerfile with --no-deps
+# because it pins spaCy<3 and would otherwise downgrade the stack. At runtime
+# it is attempted first and, if it errors on the modern spaCy, resume_parser
+# transparently falls back to the custom spaCy 3.x parser. See README.
